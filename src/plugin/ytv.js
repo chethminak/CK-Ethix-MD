@@ -1,9 +1,10 @@
 import ytdl from 'ytdl-core';
+import yts from 'yt-search';
 import pkg, { prepareWAMessageMedia } from '@whiskeysockets/baileys';
 const { generateWAMessageFromContent, proto } = pkg;
 
 const videoMap = new Map();
-let videoIndex = 1; 
+let videoIndex = 1;
 
 const song = async (m, Matrix) => {
   let selectedListId;
@@ -24,7 +25,7 @@ const song = async (m, Matrix) => {
   const prefix = prefixMatch ? prefixMatch[0] : '/';
   const cmd = m.body.startsWith(prefix) ? m.body.slice(prefix.length).split(' ')[0].toLowerCase() : '';
   const text = m.body.slice(prefix.length + cmd.length).trim();
-  
+
   const validCommands = ['ytv'];
 
   if (validCommands.includes(cmd)) {
@@ -35,15 +36,7 @@ const song = async (m, Matrix) => {
     try {
       await m.React("🕘");
 
-
       const info = await ytdl.getInfo(text);
-      const formats = ytdl.filterFormats(info.formats, 'videoandaudio');
-
-      if (formats.length === 0) {
-        m.reply('No downloadable formats found.');
-        await m.React("❌");
-        return;
-      }
 
       const videoDetails = {
         title: info.videoDetails.title,
@@ -51,20 +44,38 @@ const song = async (m, Matrix) => {
         views: info.videoDetails.viewCount,
         likes: info.videoDetails.likes,
         uploadDate: formatDate(info.videoDetails.uploadDate),
-        duration: formatDuration(info.videoDetails.lengthSeconds)
+        duration: formatDuration(info.videoDetails.lengthSeconds),
+        thumbnailUrl: info.videoDetails.thumbnails[0].url,
+        videoUrl: info.videoDetails.video_url
       };
 
-      const qualityButtons = await Promise.all(formats.map(async (format, index) => {
-        const uniqueId = videoIndex + index;
-        const size = format.contentLength ? formatSize(format.contentLength) : 'Unknown size';
-        videoMap.set(uniqueId, { ...format, videoId: info.videoDetails.videoId, ...videoDetails, size });
-        return {
-          "header": "",
-          "title": `${format.qualityLabel} (${format.container}) - ${size}`,
-          "description": `Bitrate: ${format.bitrate}`,
-          "id": `quality_${uniqueId}` 
-        };
-      }));
+      const videoInfo = await yts({ videoId: ytdl.getURLVideoID(videoDetails.videoUrl) });
+
+      // Filter formats to only include those with both audio and video
+      const formats = info.formats.filter(format => format.hasAudio && format.hasVideo);
+
+      // Map of quality labels to the respective format itags
+      const desiredQualities = {
+        '144p': formats.find(f => f.qualityLabel === '144p')?.itag,
+        '240p': formats.find(f => f.qualityLabel === '240p')?.itag,
+        '360p': formats.find(f => f.qualityLabel === '360p')?.itag,
+        '480p': formats.find(f => f.qualityLabel === '480p')?.itag,
+        '720p': formats.find(f => f.qualityLabel === '720p')?.itag,
+        '1080p': formats.find(f => f.qualityLabel === '1080p')?.itag,
+      };
+
+      const qualityButtons = Object.entries(desiredQualities).map(([quality, itag], index) => {
+        if (itag) {
+          const uniqueId = videoIndex + index;
+          videoMap.set(uniqueId, { itag, videoId: info.videoDetails.videoId, ...videoDetails, quality });
+          return {
+            "header": "",
+            "title": `${quality}`,
+            "description": `Select ${quality} quality`,
+            "id": `quality_${uniqueId}`
+          };
+        }
+      }).filter(Boolean);
 
       const msg = generateWAMessageFromContent(m.from, {
         viewOnceMessage: {
@@ -75,17 +86,17 @@ const song = async (m, Matrix) => {
             },
             interactiveMessage: proto.Message.InteractiveMessage.create({
               body: proto.Message.InteractiveMessage.Body.create({
-                text: `𝞢𝙏𝞖𝞘𝞦-𝞛𝘿 Video Downloader\n*🔍Title:* ${videoDetails.title}\n*✍️ Author:* ${videoDetails.author}\n*🥸Views:* ${videoDetails.views}\n*👍 Likes:* ${videoDetails.likes}\n*📆 Upload Date:* ${videoDetails.uploadDate}\n*🏮 Duration:* ${videoDetails.duration}\n`
+                text: `Video Downloader\n*🔍Title:* ${videoDetails.title}\n*✍️ Author:* ${videoDetails.author}\n*🥸Views:* ${videoDetails.views}\n*👍 Likes:* ${videoDetails.likes}\n*📆 Upload Date:* ${videoDetails.uploadDate}\n*🏮 Duration:* ${videoDetails.duration}\n`
               }),
               footer: proto.Message.InteractiveMessage.Footer.create({
-                text: "© Powered By 𝞢𝙏𝞖𝞘𝞦-𝞛𝘿"
+                text: "© Powered By Ethix-MD"
               }),
               header: proto.Message.InteractiveMessage.Header.create({
-                ...(await prepareWAMessageMedia({ image: { url: `https://telegra.ph/file/fbbe1744668b44637c21a.jpg` } }, { upload: Matrix.waUploadToServer })),
+                ...(await prepareWAMessageMedia({ image: { url: videoInfo.thumbnail } }, { upload: Matrix.waUploadToServer })),
                 title: "",
                 gifPlayback: true,
                 subtitle: "",
-                hasMediaAttachment: false 
+                hasMediaAttachment: false
               }),
               nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
                 buttons: [
@@ -95,7 +106,7 @@ const song = async (m, Matrix) => {
                       title: "🎬 Select a video quality",
                       sections: [
                         {
-                          title: "♂️ Available Qualities",
+                          title: "📥 Available Qualities",
                           highlight_label: "💡 Choose Quality",
                           rows: qualityButtons
                         },
@@ -108,6 +119,11 @@ const song = async (m, Matrix) => {
                 mentionedJid: [m.sender],
                 forwardingScore: 999,
                 isForwarded: true,
+                forwardedNewsletterMessageInfo: {
+                  newsletterJid: '120363249960769123@newsletter',
+                  newsletterName: "Ethix-MD",
+                  serverMessageId: 143
+                }
               }
             }),
           },
@@ -119,7 +135,7 @@ const song = async (m, Matrix) => {
       });
       await m.React("✅");
 
-      videoIndex += formats.length;
+      videoIndex += qualityButtons.length;
     } catch (error) {
       console.error("Error processing your request:", error);
       m.reply('Error processing your request.');
@@ -127,27 +143,28 @@ const song = async (m, Matrix) => {
     }
   } else if (selectedId) {
     const key = parseInt(selectedId.replace('quality_', ''));
-    const selectedFormat = videoMap.get(key);
+    const selectedQuality = videoMap.get(key);
 
-    if (selectedFormat) {
+    if (selectedQuality) {
       try {
-        const videoUrl = `https://www.youtube.com/watch?v=${selectedFormat.videoId}`;
-        const videoStream = ytdl(videoUrl, { format: selectedFormat });
+        const videoUrl = `https://www.youtube.com/watch?v=${selectedQuality.videoId}`;
+
+        const videoStream = ytdl(videoUrl, { quality: selectedQuality.itag });
+
         const finalVideoBuffer = await streamToBuffer(videoStream);
 
-        const duration = selectedFormat.duration;
-        const size = selectedFormat.size;
-
         await Matrix.sendMessage(m.from, {
-          video: finalVideoBuffer,
+          document: finalVideoBuffer,
           mimetype: 'video/mp4',
-          caption: `Title: ${selectedFormat.title}\nAuthor: ${selectedFormat.author}\nViews: ${selectedFormat.views}\nLikes: ${selectedFormat.likes}\nUpload Date: ${selectedFormat.uploadDate}\nDuration: ${duration}\nSize: ${size}\n\n> Powered by 𝞢𝙏𝞖𝞘𝞦-𝞛𝘿`
-        }, { quoted: m });
+          fileName: `${selectedQuality.title}`,
+          caption: `> © Powered By Ethix-MD\n\n*${selectedQuality.quality}*`
+        }, {
+          quoted: m
+        });
       } catch (error) {
         console.error("Error fetching video details:", error);
-        m.reply('Error fetching video details.');
+        m.reply(`Error fetching video details: ${error.message}`);
       }
-    } else {
     }
   }
 };
@@ -157,13 +174,6 @@ const formatDuration = (seconds) => {
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
   return `${h}h ${m}m ${s}s`;
-};
-
-const formatSize = (size) => {
-  if (size < 1024) return `${size.toFixed(2)} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(2)} KB`;
-  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(2)} MB`;
-  return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
 };
 
 const formatDate = (date) => {
